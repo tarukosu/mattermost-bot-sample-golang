@@ -4,26 +4,30 @@
 package main
 
 import (
+	"fmt"
+	"io/ioutil"
 	"os"
 	"os/signal"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/mattermost/platform/model"
+	"gopkg.in/yaml.v2"
 )
 
 const (
 	SAMPLE_NAME = "Mattermost Bot Sample"
 
-	USER_EMAIL    = "bot@example.com"
-	USER_PASSWORD = "password1"
-	USER_NAME     = "samplebot"
-	USER_FIRST    = "Sample"
-	USER_LAST     = "Bot"
+	USER_NAME  = "samplebot"
+	USER_FIRST = "Sample"
+	USER_LAST  = "Bot"
 
-	TEAM_NAME        = "botsample"
+	TEAM_NAME        = "test"
 	CHANNEL_LOG_NAME = "debugging-for-sample-bot"
 )
+
+var userEmail, userPassword string
 
 var client *model.Client
 var webSocketClient *model.WebSocketClient
@@ -33,10 +37,33 @@ var botTeam *model.Team
 var initialLoad *model.InitialLoad
 var debuggingChannel *model.Channel
 
+// Settings is a struct for load settings
+type Settings struct {
+	UserEmail    string `yaml:"user_email"`
+	UserPassword string `yaml:"user_password"`
+	TeamName     string `yaml:"team_name"`
+}
+
+var s Settings
+
 // Documentation for the Go driver can be found
 // at https://godoc.org/github.com/mattermost/platform/model#Client
 func main() {
 	println(SAMPLE_NAME)
+	buf, err := ioutil.ReadFile("settings.yml")
+	if err != nil {
+		panic(err)
+	}
+
+	s = Settings{}
+	//m := make(map[interface{}]interface{})
+	err = yaml.Unmarshal(buf, &s)
+	if err != nil {
+		panic(err)
+	}
+	userEmail = s.UserEmail
+	fmt.Printf("settings: %v", s)
+	//fmt.Printf("%s\n", s["user_email"])
 
 	SetupGracefulShutdown()
 
@@ -51,7 +78,7 @@ func main() {
 	LoginAsTheBotUser()
 
 	// If the bot user doesn't have the correct information lets update his profile
-	UpdateTheBotUserIfNeeded()
+	//UpdateTheBotUserIfNeeded()
 
 	// Lets load all the stuff we might need
 	InitialLoad()
@@ -63,30 +90,35 @@ func main() {
 	// for all future web service requests that require a team.
 	client.SetTeamId(botTeam.Id)
 
+	GetChannels()
+
 	// Lets create a bot channel for logging debug messages into
-	CreateBotDebuggingChannelIfNeeded()
-	SendMsgToDebuggingChannel("_"+SAMPLE_NAME+" has **started** running_", "")
+	//CreateBotDebuggingChannelIfNeeded()
+	//SendMsgToDebuggingChannel("_"+SAMPLE_NAME+" has **started** running_", "")
 
 	// Lets start listening to some channels via the websocket!
-	webSocketClient, err := model.NewWebSocketClient("ws://localhost:8065", client.AuthToken)
-	if err != nil {
-		println("We failed to connect to the web socket")
-		PrintError(err)
-	}
-
-	webSocketClient.Listen()
-
-	go func() {
-		for {
-			select {
-			case resp := <-webSocketClient.EventChannel:
-				HandleWebSocketResponse(resp)
-			}
+	/*
+		webSocketClient, err := model.NewWebSocketClient("ws://localhost:8065", client.AuthToken)
+		if err != nil {
+			println("We failed to connect to the web socket")
+			PrintError(err)
 		}
-	}()
 
-	// You can block forever with
-	select {}
+		webSocketClient.Listen()
+
+		go func() {
+			for {
+				select {
+				case resp := <-webSocketClient.EventChannel:
+					HandleWebSocketResponse(resp)
+				}
+			}
+		}()
+
+		// You can block forever with
+
+		select {}
+	*/
 }
 
 func MakeSureServerIsRunning() {
@@ -100,7 +132,7 @@ func MakeSureServerIsRunning() {
 }
 
 func LoginAsTheBotUser() {
-	if loginResult, err := client.Login(USER_EMAIL, USER_PASSWORD); err != nil {
+	if loginResult, err := client.Login(s.UserEmail, s.UserPassword); err != nil {
 		println("There was a problem logging into the Mattermost server.  Are you sure ran the setup steps from the README.md?")
 		PrintError(err)
 		os.Exit(1)
@@ -138,16 +170,44 @@ func InitialLoad() {
 
 func FindBotTeam() {
 	for _, team := range initialLoad.Teams {
-		if team.Name == TEAM_NAME {
+		if team.Name == s.TeamName {
 			botTeam = team
 			break
 		}
 	}
 
 	if botTeam == nil {
-		println("We do not appear to be a member of the team '" + TEAM_NAME + "'")
+		println("We do not appear to be a member of the team '" + s.TeamName + "'")
 		os.Exit(1)
 	}
+}
+
+func GetChannels() {
+	if channelsResult, err := client.GetChannels(""); err != nil {
+		PrintError(err)
+	} else {
+		channelList := channelsResult.Data.(*model.ChannelList)
+		for _, channel := range *channelList {
+			println(channel.DisplayName)
+			GetMessages(channel.Id)
+		}
+	}
+}
+
+func GetMessages(channelId string) {
+	if postsResult, err := client.GetPostsSince(channelId, 0); err != nil {
+		PrintError(err)
+	} else {
+		postList := postsResult.Data.(*model.PostList)
+		for _, post := range postList.Posts {
+			println(post.Message)
+			fmt.Println(time.Unix(0, post.CreateAt*int64(time.Millisecond)))
+			println("%f", post.CreateAt)
+			fmt.Printf("%f", post.CreateAt)
+
+		}
+	}
+
 }
 
 func CreateBotDebuggingChannelIfNeeded() {
